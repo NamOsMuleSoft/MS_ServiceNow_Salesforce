@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:servicenow="http://www.mulesoft.org/schema/mule/servicenow"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/servicenow http://www.mulesoft.org/schema/mule/servicenow/current/mule-servicenow.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	<servicenow:config name="ServiceNow_Config" doc:name="ServiceNow Config" doc:id="61dd6a95-d77c-4fb5-bdbc-6390fd10d6d9" >
+		<servicenow:basic-connection username="admin" password="ziK4L@C$Vud5" serviceAddress="https://dev86885.service-now.com/" />
+	</servicenow:config>
+	<salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="0fda8fc5-3fc0-46b0-84b2-9fac0c207a3f" >
+		<salesforce:basic-connection username="ntonthat@ntonthat-230317-386.demo" password="Salesforce*" />
+	</salesforce:sfdc-config>
+	<flow name="servicenow-salesforceFlow" doc:id="c72857a6-2874-4e27-af95-99a44e93c2b0" >
+		<servicenow:new-or-updated-record-listener tableName="incident" doc:name="New / Updated Record" doc:id="1b6c4318-2614-414c-9f36-5811ff65606b" config-ref="ServiceNow_Config">
+		<scheduling-strategy>
+      <fixed-frequency frequency="1" timeUnit="SECONDS" />
+    </scheduling-strategy>
+		</servicenow:new-or-updated-record-listener>
+		<ee:transform doc:name="Set Variables" doc:id="266484b2-20bf-4b97-a220-70c8e753de34">
+					<ee:message>
+						<ee:set-payload><![CDATA[payload]]></ee:set-payload>
+					</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="isSFCaseCreated" ><![CDATA[%dw 2.0
+output application/json
+---
+payload.getRecordsResult.u_salesforce_id != "Not Set"]]></ee:set-variable>
+				<ee:set-variable variableName="serviceNowSysId" ><![CDATA[%dw 2.0
+output application/json
+---
+payload.getRecordsResult.sys_id]]></ee:set-variable>
+			</ee:variables>
+				</ee:transform>
+		<choice doc:name="Choice" doc:id="92e819cc-7f12-445f-83af-3e67d26d3472" >
+			<when expression="#[!vars.isSFCaseCreated]">
+				<salesforce:create type="Case" doc:name="Create a new Case" doc:id="dae2a832-e14b-44f4-bff1-a3a75f3448e4" config-ref="Salesforce_Config">
+			<salesforce:records><![CDATA[#[%dw 2.0
+output application/java
+
+fun getPriorityString(aInt) = aInt match  {
+    case is "1" -> "High"
+    case is "2" -> "Medium"
+    case is "3" -> "Low"
+}
+
+
+---
+[{
+	ContactId: "0030900001lk9cJAAQ",
+	AccountId: "0010900001ucAPCAA2",
+	Subject: payload.getRecordsResult.short_description,
+	Description: payload.getRecordsResult.description,
+	External_ID__c: payload.getRecordsResult.sys_id,
+	Priority : getPriorityString(payload.getRecordsResult.severity)}]]]]></salesforce:records>
+		</salesforce:create>
+				<servicenow:invoke service="incident" doc:name="Set Salesforce Id in to ServiceNow Incident" doc:id="3908f299-62cf-4949-a1e9-7f1b12403980" config-ref="ServiceNow_Config" operation="update">
+					<servicenow:message >
+						<servicenow:body ><![CDATA[#[output application/xml
+ns ns0 http://www.service-now.com/incident
+---
+{
+	ns0#update: {
+
+		sys_id: vars.serviceNowSysId,
+		u_salesforce_id: payload.items[0].id
+	}
+}]]]></servicenow:body>
+					</servicenow:message>
+				</servicenow:invoke>
+			</when>
+		</choice>
+		<logger level="INFO" doc:name="Logger" doc:id="82402959-394b-4662-aafc-85657f6e1fa6" />
+	</flow>
+	<flow name="servicenow-salesforceFlow1" doc:id="22293012-ddcc-406e-8e1c-f127f5a45340" >
+		<salesforce:subscribe-topic-listener doc:name="Subscribe topic listener for case with closed state" doc:id="b74ed13c-d4b4-42a0-ad2a-ebcc304cf5d7" config-ref="Salesforce_Config" topic="CaseTopic"/>
+		<ee:transform doc:name="Set Variables" doc:id="a4707b62-dc67-4700-9d10-88897294fc01" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="topicPayload" ><![CDATA[payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<salesforce:query doc:name="Query Case for Close Summary" doc:id="4c3fbb1b-d54b-47b0-a7cd-7f0bc4a95ec5" config-ref="Salesforce_Config">
+			<salesforce:salesforce-query ><![CDATA[SELECT SDO_Service_Close_Summary__c FROM Case where Id=':Id']]></salesforce:salesforce-query>
+			<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"Id" : payload.Id}]]]></salesforce:parameters>
+		</salesforce:query>
+		<servicenow:invoke service="incident" doc:name="Update Incident" doc:id="e978ba0e-8df2-47df-9c14-95dfb0efe925" config-ref="ServiceNow_Config" operation="update">
+			<servicenow:message >
+				<servicenow:body ><![CDATA[#[output application/xml
+ns ns0 http://www.service-now.com/incident
+---
+{
+	ns0#update: {
+		close_code: "Closed/Resolved by Caller",
+		sys_id: vars.topicPayload.External_ID__c,
+		close_notes: payload.SDO_Service_Close_Summary__c,
+		comments: vars.topicPayload.Reason,
+		state: 6
+	}
+}]]]></servicenow:body>
+			</servicenow:message>
+		</servicenow:invoke>
+	</flow>
+</mule>
